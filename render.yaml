@@ -2,12 +2,11 @@ services:
   - type: web
     name: lead-generation-app
     runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
     plan: starter
+    region: oregon
     healthCheckPath: /_stcore/health
     envVars:
-      - key: STREAMLIT_SERVER_PORT
+      - key: PORT
         value: "10000"
-      - key: STREAMLIT_SERVER_ADDRESS
-        value: "0.0.0.0"
-      - key: STREAMLIT_SERVER_HEADLESS
-        value: "true"
