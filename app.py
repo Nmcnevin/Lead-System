@@ -1,6 +1,6 @@
 """
-Lead Generation System - Fixed Scroll & Multiple Results
-Corrected to extract ALL businesses from scrollable panel
+Lead Generation System - Production Ready
+Optimized for Streamlit Cloud & Render Deployment
 """
 
 import streamlit as st
@@ -75,11 +75,14 @@ def display_error_log():
                     st.caption(f"   Details: {error['details']}")
 
 # ============================================
-# WEBDRIVER INITIALIZATION
+# WEBDRIVER INITIALIZATION (NO CACHING - FIXES SESSION ERROR)
 # ============================================
 
 def get_chrome_driver():
-    """Initialize Chrome driver - creates FRESH instance each time"""
+    """
+    Initialize Chrome driver - creates FRESH instance each time
+    This prevents 'invalid session id' errors
+    """
     options = Options()
     
     # Essential options for deployment
@@ -105,12 +108,15 @@ def get_chrome_driver():
     try:
         # Detect environment and use appropriate path
         if os.path.exists("/usr/bin/chromedriver"):
+            # Streamlit Cloud or Chromium installation
             service = Service(executable_path="/usr/bin/chromedriver")
             logger.info("Using chromedriver from /usr/bin/")
         elif os.path.exists("/usr/local/bin/chromedriver"):
+            # Render/Docker with Chrome
             service = Service(executable_path="/usr/local/bin/chromedriver")
             logger.info("Using chromedriver from /usr/local/bin/")
         else:
+            # Fallback to system PATH
             service = Service()
             logger.info("Using chromedriver from system PATH")
         
@@ -400,78 +406,45 @@ def extract_website(driver, business_name="Unknown"):
     
     return "N/A"
 
-def scroll_results_panel_fixed(driver, panel, max_scrolls=15, progress_callback=None):
-    """
-    FIXED: Properly scroll and wait for all results to load
-    Returns the number of unique business links found
-    """
+def scroll_results_panel(driver, panel, max_scrolls=8):
+    """Scroll to load all results"""
     scroll_count = 0
-    last_height = 0
-    consecutive_no_change = 0
+    last_height = driver.execute_script("return arguments[0].scrollHeight", panel)
+    no_change_count = 0
     
     while scroll_count < max_scrolls:
         try:
-            # Get current height BEFORE scroll
-            current_height = driver.execute_script("return arguments[0].scrollHeight", panel)
+            driver.execute_script("arguments[0].scrollTop = arguments[0].scrollHeight", panel)
+            time.sleep(random.uniform(1.5, 2.5))
             
-            # Scroll to bottom
-            driver.execute_script("arguments[0].scrollTo(0, arguments[0].scrollHeight);", panel)
-            
-            # CRITICAL: Wait longer for new content to load
-            time.sleep(3.0)  # Increased from 1.5-2.5 to 3.0 seconds
-            
-            # Check if we've reached the end
             new_height = driver.execute_script("return arguments[0].scrollHeight", panel)
             
-            # Count current business links
-            try:
-                business_links = driver.find_elements(
-                    By.XPATH, 
-                    "//a[contains(@href, 'https://www.google.com/maps/place')]"
-                )
-                current_count = len(business_links)
-                
-                if progress_callback:
-                    progress_callback(f"📜 Scroll {scroll_count + 1}/{max_scrolls}: Found {current_count} businesses")
-                
-            except:
-                current_count = 0
-            
-            # Check if height changed
             if new_height == last_height:
-                consecutive_no_change += 1
-                if consecutive_no_change >= 3:
-                    logger.info(f"Reached end after {scroll_count} scrolls with {current_count} businesses")
+                no_change_count += 1
+                if no_change_count >= 3:
                     break
             else:
-                consecutive_no_change = 0
+                no_change_count = 0
                 last_height = new_height
             
             scroll_count += 1
-            
-            # Small random delay to appear more human-like
-            time.sleep(random.uniform(0.5, 1.0))
-            
         except Exception as e:
             log_error("SCROLL_ERROR", "Failed to scroll", str(e))
             break
     
-    # Final wait to ensure all content is loaded
-    time.sleep(2.0)
-    
     return scroll_count
 
 # ============================================
-# MAIN SCRAPING FUNCTION - FIXED
+# MAIN SCRAPING FUNCTION
 # ============================================
 
 def scrape_google_maps_real(keyword, location, max_results=10, extract_contact=True, progress_callback=None):
     """
-    FIXED: Production-ready Google Maps scraper
-    Now properly extracts ALL businesses from scrollable panel
+    Production-ready Google Maps scraper
+    Creates fresh driver instance to prevent session errors
     """
     businesses = []
-    driver = None
+    driver = None  # Initialize as None
     stats = {
         'total_found': 0,
         'successfully_extracted': 0,
@@ -504,7 +477,7 @@ def scrape_google_maps_real(keyword, location, max_results=10, extract_contact=T
         
         try:
             driver.get(url)
-            time.sleep(random.uniform(5, 7))  # Increased initial wait
+            time.sleep(random.uniform(4, 6))
         except TimeoutException:
             error_msg = "⏱️ Google Maps page load timeout. Check internet connection."
             log_error("PAGE_TIMEOUT", "Failed to load Google Maps", url)
@@ -530,7 +503,6 @@ def scrape_google_maps_real(keyword, location, max_results=10, extract_contact=T
                     EC.presence_of_element_located((By.XPATH, selector))
                 )
                 if panel:
-                    logger.info(f"✅ Found results panel using: {selector}")
                     break
             except TimeoutException:
                 continue
@@ -544,21 +516,17 @@ def scrape_google_maps_real(keyword, location, max_results=10, extract_contact=T
             return pd.DataFrame(), error_msg, stats
         
         if progress_callback:
-            progress_callback("📜 Step 1/2: Scrolling to load ALL results...")
+            progress_callback("📜 Step 1/2: Scrolling to load more results...")
         
-        # FIXED: Better scrolling with more attempts
-        scroll_count = scroll_results_panel_fixed(driver, panel, max_scrolls=15, progress_callback=progress_callback)
+        scroll_count = scroll_results_panel(driver, panel, max_scrolls=8)
         
         if progress_callback:
-            progress_callback(f"✓ Completed {scroll_count} scrolls. Collecting business links...")
+            progress_callback(f"✓ Completed {scroll_count} scrolls")
         
-        # Additional wait after scrolling
-        time.sleep(3.0)
+        time.sleep(2)
         
-        # FIXED: Collect ALL unique business links after scrolling
-        business_links_hrefs = set()  # Use set to avoid duplicates
-        business_elements_map = {}  # Map href to element
-        
+        # Find business elements
+        business_elements = []
         link_selectors = [
             "//a[contains(@href, 'https://www.google.com/maps/place')]",
             "//a[contains(@class, 'hfpxzc')]",
@@ -567,48 +535,50 @@ def scrape_google_maps_real(keyword, location, max_results=10, extract_contact=T
         for selector in link_selectors:
             try:
                 elements = driver.find_elements(By.XPATH, selector)
-                logger.info(f"Found {len(elements)} elements with selector: {selector}")
-                
-                for elem in elements:
-                    try:
-                        href = elem.get_attribute('href')
-                        if href and 'maps/place' in href:
-                            business_links_hrefs.add(href)
-                            if href not in business_elements_map:
-                                business_elements_map[href] = elem
-                    except:
-                        continue
-                        
-                if business_links_hrefs:
-                    break  # Found links, no need to try other selectors
-                    
+                if elements:
+                    business_elements = elements
+                    break
             except Exception as e:
                 log_error("ELEMENT_FIND", "Error finding businesses", str(e))
                 continue
         
-        if not business_links_hrefs:
+        if not business_elements:
             error_msg = f"❌ No businesses found for '{keyword}' in '{location}'.\n\nSuggestions:\n• Use simpler keywords\n• Try nearby locations\n• Check if businesses exist"
             log_error("NO_RESULTS", "No business elements", f"Query: {keyword} in {location}")
             return pd.DataFrame(), error_msg, stats
         
-        # Limit to max_results
-        business_links_hrefs = list(business_links_hrefs)[:max_results]
-        stats['total_found'] = len(business_links_hrefs)
+        # Extract business links
+        business_links = []
+        for elem in business_elements:
+            try:
+                href = elem.get_attribute('href')
+                if href and 'maps/place' in href:
+                    business_links.append(elem)
+                    if len(business_links) >= max_results:
+                        break
+            except StaleElementReferenceException:
+                continue
+            except:
+                continue
         
-        logger.info(f"✅ Collected {len(business_links_hrefs)} unique business links")
+        stats['total_found'] = len(business_links)
+        
+        if not business_links:
+            error_msg = "❌ Found results but couldn't extract links. Google Maps layout may have changed."
+            log_error("NO_LINKS", "Could not extract business links", "Elements stale")
+            return pd.DataFrame(), error_msg, stats
         
         if progress_callback:
-            progress_callback(f"📊 Step 1/2: Found {len(business_links_hrefs)} businesses. Extracting details...")
+            progress_callback(f"📊 Step 1/2: Found {len(business_links)} businesses. Extracting details...")
         
-        # Extract details for each business by navigating to their URL
-        for idx, href in enumerate(business_links_hrefs):
+        # Extract details for each business
+        for idx, link in enumerate(business_links):
             try:
-                # Navigate directly to business page
-                if progress_callback:
-                    progress_callback(f"📍 Step 1/2: Extracting {idx + 1}/{len(business_links_hrefs)}...")
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", link)
+                time.sleep(0.6)
                 
-                driver.get(href)
-                time.sleep(random.uniform(3, 4.5))  # Wait for page to load
+                driver.execute_script("arguments[0].click();", link)
+                time.sleep(random.uniform(2.5, 4))
                 
                 # Extract name
                 name_xpaths = [
@@ -623,7 +593,7 @@ def scrape_google_maps_real(keyword, location, max_results=10, extract_contact=T
                         break
                 
                 if name == "N/A":
-                    log_error("NAME_EXTRACT", f"Business #{idx+1}: No name", href)
+                    log_error("NAME_EXTRACT", f"Business #{idx+1}: No name", "All XPaths failed")
                     stats['google_maps_errors'] += 1
                     continue
                 
@@ -645,7 +615,7 @@ def scrape_google_maps_real(keyword, location, max_results=10, extract_contact=T
                 
                 rating = extract_text_safe(driver, "//div[contains(@class, 'F7nice')]//span[@aria-hidden='true']")
                 
-                reviews = extract_text_safe (driver, "//div[contains(@class, 'F7nice')]//span[@aria-label]", "aria-label")
+                reviews = extract_text_safe(driver, "//div[contains(@class, 'F7nice')]//span[@aria-label]", "aria-label")
                 if reviews != "N/A" and "reviews" in reviews:
                     reviews = reviews.split()[0].replace(',', '')
                 
@@ -653,7 +623,7 @@ def scrape_google_maps_real(keyword, location, max_results=10, extract_contact=T
                     'Business Name': name,
                     'Email ID': 'N/A',
                     'Phone Number': phone,
-                    'Location/Address': address,
+                    'Location / Address': address,
                     'Business Category': category,
                     'Website URL': website,
                     'Social Media Profiles': 'N/A',
@@ -665,15 +635,19 @@ def scrape_google_maps_real(keyword, location, max_results=10, extract_contact=T
                 stats['successfully_extracted'] += 1
                 
                 if progress_callback:
-                    progress_callback(f"✓ Step 1/2: Extracted {idx + 1}/{len(business_links_hrefs)}: {name[:40]}")
+                    progress_callback(f"✓ Step 1/2: Extracted {idx + 1}/{len(business_links)}: {name}")
                 
+            except StaleElementReferenceException:
+                log_error("STALE_ELEMENT", f"Business #{idx+1}: Stale element", "Skip")
+                stats['google_maps_errors'] += 1
+                continue
             except Exception as e:
                 log_error("EXTRACT_ERROR", f"Business #{idx+1}: Error", str(e))
                 stats['google_maps_errors'] += 1
                 continue
         
         if not businesses:
-            error_msg = f"❌ Extracted 0 of {len(business_links_hrefs)} businesses. See error log."
+            error_msg = f"❌ Extracted 0 of {len(business_links)} businesses. See error log."
             return pd.DataFrame(), error_msg, stats
         
         # Step 2: Extract emails and social media
@@ -738,9 +712,9 @@ def scrape_google_maps_real(keyword, location, max_results=10, extract_contact=T
 # ============================================
 
 st.title("🎯 Lead Generation Automation System")
-st.markdown("**FIXED VERSION** | Now extracts ALL businesses from scroll")
+st.markdown("**Production Ready** | Optimized for Streamlit Cloud & Render")
 
-st.success("✅ **FIXED:** Scrolling now properly loads and extracts multiple businesses!")
+st.info("📊 **2-Step Process:** Extract from Google Maps (30-60s) → Scrape websites for contact info (5-10s per business)")
 
 # Display error log
 display_error_log()
@@ -771,9 +745,9 @@ with col2:
 num_results = st.slider(
     "Number of Results",
     min_value=3,
-    max_value=20,
-    value=10,
-    help="Now properly extracts multiple results!"
+    max_value=15,
+    value=8,
+    help="Recommended: 5-10 results for optimal performance"
 )
 
 extract_contact = st.checkbox(
@@ -783,9 +757,9 @@ extract_contact = st.checkbox(
 )
 
 if extract_contact:
-    st.caption(f"⏱️ Estimated time: {num_results * 8}-{num_results * 15} seconds")
+    st.caption(f"⏱️ Estimated time: {num_results * 8}-{num_results * 12} seconds")
 else:
-    st.caption(f"⏱️ Estimated time: {num_results * 5}-{num_results * 8} seconds")
+    st.caption(f"⏱️ Estimated time: {num_results * 4}-{num_results * 6} seconds")
 
 st.divider()
 
@@ -823,25 +797,13 @@ if start_button:
                         progress_bar.progress(5)
                     elif "Loading" in message:
                         progress_bar.progress(15)
-                    elif "Scrolling" in message or "Scroll" in message:
+                    elif "Scrolling" in message:
                         progress_bar.progress(30)
-                    elif "Collecting" in message:
-                        progress_bar.progress(45)
                     elif "Extracting" in message or "Extracted" in message:
-                        try:
-                            parts = message.split(":")
-                            if len(parts) > 1 and "/" in parts[1]:
-                                nums = parts[1].split("/")
-                                if len(nums) == 2:
-                                    current = int(nums[0].strip().split()[-1])
-                                    total = int(nums[1].split()[0])
-                                    progress = 50 + int((current / total) * 40)
-                                    progress_bar.progress(min(progress, 90))
-                        except:
-                            progress_bar.progress(50)
+                        progress_bar.progress(50)
                 elif "Step 2/2" in message:
                     if "Starting" in message or "Scraping websites" in message:
-                        progress_bar.progress(91)
+                        progress_bar.progress(55)
                     else:
                         try:
                             parts = message.split(":")
@@ -850,8 +812,8 @@ if start_button:
                                 if len(nums) == 2:
                                     current = int(nums[0].strip().split()[-1])
                                     total = int(nums[1].split()[0])
-                                    progress = 91 + int((current / total) * 8)
-                                    progress_bar.progress(min(progress, 99))
+                                    progress = 55 + int((current / total) * 40)
+                                    progress_bar.progress(min(progress, 95))
                         except:
                             pass
             
@@ -954,8 +916,8 @@ else:
     
     empty_df = pd.DataFrame(columns=[
         'Business Name', 'Email ID', 'Phone Number',
-        'Location/Address', 'Business Category',
-        'Website URL', 'Social Media Profiles', 'Rating', 'Reviews'
+        'Location / Address', 'Business Category',
+        'Website URL', 'Social Media Profiles'
     ])
     st.dataframe(empty_df, use_container_width=True, height=200)
 
@@ -1001,24 +963,14 @@ else:
 
 # Footer
 st.divider()
-st.caption("🚀 Lead Generation System v3.1 - FIXED: Multiple Results Extraction")
+st.caption("🚀 Lead Generation System v3.0 - Production Ready")
 st.caption("⚡ Use responsibly | Respect rate limits and Terms of Service")
 
 # Sidebar
 with st.sidebar:
     st.header("🔧 System Info")
     
-    st.success("✅ **FIXED ISSUES:**")
-    st.markdown("""
-    - ✓ Proper scrolling (15 attempts)
-    - ✓ 3-second wait per scroll
-    - ✓ Direct URL navigation
-    - ✓ Unique link collection
-    - ✓ Better error handling
-    """)
-    
     if st.session_state.extraction_stats:
-        st.write("**Latest Stats:**")
         st.json(st.session_state.extraction_stats)
     
     st.write("**Session:**")
